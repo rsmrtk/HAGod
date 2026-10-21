@@ -41,6 +41,8 @@ make watch           # live dashboard: keep it open in a second terminal
 
 Then read **[docs/00-START-HERE.md](docs/00-START-HERE.md)**: the plan, how to practise, and the order of the drills.
 
+🇺🇦 **Українською:** [docs/uk/README.md](docs/uk/README.md) (повний переклад: план, команди, шпаргалки, усі 15 drill'ів).
+
 ## Everyday commands
 
 | Command | What it does |
