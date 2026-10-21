@@ -1,0 +1,62 @@
+# Alerts worth having for exactly this stack. Read them as a checklist of "what can go wrong".
+groups:
+  - name: postgres-ha
+    rules:
+      - alert: PatroniNoLeader
+        expr: sum(patroni_primary) == 0
+        for: 20s
+        annotations: {summary: "no Patroni node is primary: writes are failing (drills 01, 03, 04)"}
+      - alert: PatroniTwoLeaders
+        expr: sum(patroni_primary) > 1
+        annotations: {summary: "more than one primary: SPLIT BRAIN"}
+      - alert: PatroniNodeDown
+        expr: up{job="patroni"} == 0
+        for: 15s
+        annotations: {summary: "a Patroni node does not answer ({{ $labels.instance }})"}
+      - alert: EtcdNoLeader
+        expr: etcd_server_has_leader == 0
+        for: 10s
+        annotations: {summary: "an etcd member sees no leader: Postgres will demote itself (drill 03)"}
+      - alert: EtcdMemberDown
+        expr: up{job="etcd"} == 0
+        for: 15s
+        annotations: {summary: "etcd member down: you can lose only ONE more"}
+      - alert: PostgresWalArchiveFailing
+        expr: increase(pg_stat_archiver_failed_count[2m]) > 0
+        annotations: {summary: "archive_command is failing: pg_wal will fill the disk (drill 08)"}
+      - alert: PostgresInactiveSlotRetainingWal
+        expr: pg_replication_slots_active == 0
+        for: 1m
+        annotations: {summary: "a replication slot is inactive: it holds WAL forever (drill 08)"}
+      - alert: PostgresReplicationLag
+        expr: pg_replication_lag_seconds > 30
+        for: 30s
+        annotations: {summary: "replica {{ $labels.instance }} is {{ $value }} s behind (drill 06)"}
+  - name: redis-ha
+    rules:
+      - alert: RedisNoMaster
+        expr: count(redis_instance_info{role="master"}) == 0
+        for: 15s
+        annotations: {summary: "no Redis master (drills 11, 12)"}
+      - alert: RedisSplitBrain
+        expr: count(redis_instance_info{role="master"}) > 1
+        for: 10s
+        annotations: {summary: "two Redis masters at the same time (drill 13)"}
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 15s
+        annotations: {summary: "{{ $labels.instance }} is down"}
+      - alert: RedisReplicaLinkDown
+        expr: redis_master_link_up == 0
+        for: 30s
+        annotations: {summary: "replica {{ $labels.instance }} lost its master link"}
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.85 and redis_memory_max_bytes > 0
+        for: 30s
+        annotations: {summary: "Redis above 85% of maxmemory (drill 14)"}
+      - alert: RedisEvicting
+        expr: increase(redis_evicted_keys_total[1m]) > 0
+        annotations: {summary: "Redis is evicting keys (drill 14)"}
+      - alert: RedisSlowCommands
+        expr: increase(redis_slowlog_length[1m]) > 0
+        annotations: {summary: "new entries in the slowlog (drill 15)"}

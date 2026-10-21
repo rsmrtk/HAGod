@@ -1,0 +1,233 @@
+# HAgod: Postgres (Patroni + etcd + HAProxy) and Redis (Sentinel) on one machine.
+#   make up        start everything
+#   make watch     live view while you break things
+x-patroni: &patroni
+  build: images/patroni
+  image: hagod-patroni:latest
+  restart: "no"
+  networks: [hagod]
+  depends_on: [etcd1, etcd2, etcd3]
+
+x-redis: &redis
+  image: redis:7.4
+  restart: "no"
+  networks: [hagod]
+  environment:
+    REDISCLI_AUTH: hagod-redis      # lets redis-cli inside the containers skip -a
+  volumes: ["./scripts/redis-entrypoint.sh:/entrypoint.sh:ro", "./config/redis:/config:ro"]
+  entrypoint: ["/entrypoint.sh"]
+
+x-etcd: &etcd
+  image: quay.io/coreos/etcd:v3.5.17
+  restart: "no"
+  networks: [hagod]
+
+services:
+  # ---------------------------------------------------------------- DCS (leader lock)
+  etcd1:
+    container_name: etcd1
+    networks:
+      hagod: {ipv4_address: 172.30.0.21}
+    <<: *etcd
+    hostname: etcd1
+    command: &etcdcmd >
+      etcd --name=etcd1 --data-dir=/data
+      --listen-peer-urls=http://0.0.0.0:2380 --listen-client-urls=http://0.0.0.0:2379
+      --initial-advertise-peer-urls=http://etcd1:2380 --advertise-client-urls=http://etcd1:2379
+      --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      --initial-cluster-state=new --initial-cluster-token=hagod
+    volumes: ["etcd1:/data"]
+  etcd2:
+    container_name: etcd2
+    networks:
+      hagod: {ipv4_address: 172.30.0.22}
+    <<: *etcd
+    hostname: etcd2
+    command: >
+      etcd --name=etcd2 --data-dir=/data
+      --listen-peer-urls=http://0.0.0.0:2380 --listen-client-urls=http://0.0.0.0:2379
+      --initial-advertise-peer-urls=http://etcd2:2380 --advertise-client-urls=http://etcd2:2379
+      --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      --initial-cluster-state=new --initial-cluster-token=hagod
+    volumes: ["etcd2:/data"]
+  etcd3:
+    container_name: etcd3
+    networks:
+      hagod: {ipv4_address: 172.30.0.23}
+    <<: *etcd
+    hostname: etcd3
+    command: >
+      etcd --name=etcd3 --data-dir=/data
+      --listen-peer-urls=http://0.0.0.0:2380 --listen-client-urls=http://0.0.0.0:2379
+      --initial-advertise-peer-urls=http://etcd3:2380 --advertise-client-urls=http://etcd3:2379
+      --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      --initial-cluster-state=new --initial-cluster-token=hagod
+    volumes: ["etcd3:/data"]
+
+  # ---------------------------------------------------------------- Postgres + Patroni
+  pg1:
+    container_name: pg1
+    networks:
+      hagod: {ipv4_address: 172.30.0.31}
+    <<: *patroni
+    hostname: pg1
+    environment: {PG_NAME: pg1}
+    volumes: ["pg1:/var/lib/postgresql/data", "archive:/archive", "backup:/backup"]
+    ports: ["8101:8008"]
+  pg2:
+    container_name: pg2
+    networks:
+      hagod: {ipv4_address: 172.30.0.32}
+    <<: *patroni
+    hostname: pg2
+    environment: {PG_NAME: pg2}
+    volumes: ["pg2:/var/lib/postgresql/data", "archive:/archive", "backup:/backup"]
+    ports: ["8102:8008"]
+  pg3:
+    container_name: pg3
+    networks:
+      hagod: {ipv4_address: 172.30.0.33}
+    <<: *patroni
+    hostname: pg3
+    environment: {PG_NAME: pg3}
+    volumes: ["pg3:/var/lib/postgresql/data", "archive:/archive", "backup:/backup"]
+    ports: ["8103:8008"]
+
+  haproxy:
+    container_name: haproxy
+    image: haproxy:3.0-alpine
+    hostname: haproxy
+    restart: "no"
+    networks:
+      hagod: {ipv4_address: 172.30.0.41}
+    volumes: ["./images/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro"]
+    ports: ["5440:5000", "5441:5001", "7100:7000"]   # 5000/7000 are taken by macOS AirPlay
+    depends_on: [pg1, pg2, pg3]
+
+  # ---------------------------------------------------------------- Redis + Sentinel
+  redis1:
+    container_name: redis1
+    networks:
+      hagod: {ipv4_address: 172.30.0.11}
+    <<: *redis
+    hostname: redis1
+    command: ["server"]
+    volumes: ["./scripts/redis-entrypoint.sh:/entrypoint.sh:ro", "./config/redis:/config:ro", "redis1:/data"]
+    ports: ["6401:6379"]
+  redis2:
+    container_name: redis2
+    networks:
+      hagod: {ipv4_address: 172.30.0.12}
+    <<: *redis
+    hostname: redis2
+    command: ["server"]
+    volumes: ["./scripts/redis-entrypoint.sh:/entrypoint.sh:ro", "./config/redis:/config:ro", "redis2:/data"]
+    ports: ["6402:6379"]
+    depends_on: [redis1]
+  redis3:
+    container_name: redis3
+    networks:
+      hagod: {ipv4_address: 172.30.0.13}
+    <<: *redis
+    hostname: redis3
+    command: ["server"]
+    volumes: ["./scripts/redis-entrypoint.sh:/entrypoint.sh:ro", "./config/redis:/config:ro", "redis3:/data"]
+    ports: ["6403:6379"]
+    depends_on: [redis1]
+  sentinel1:
+    container_name: sentinel1
+    networks:
+      hagod: {ipv4_address: 172.30.0.51}
+    <<: *redis
+    hostname: sentinel1
+    command: ["sentinel"]
+    volumes: ["./scripts/redis-entrypoint.sh:/entrypoint.sh:ro", "./config/redis:/config:ro", "sentinel1:/data"]
+    ports: ["26401:26379"]
+    depends_on: [redis1]
+  sentinel2:
+    container_name: sentinel2
+    networks:
+      hagod: {ipv4_address: 172.30.0.52}
+    <<: *redis
+    hostname: sentinel2
+    command: ["sentinel"]
+    volumes: ["./scripts/redis-entrypoint.sh:/entrypoint.sh:ro", "./config/redis:/config:ro", "sentinel2:/data"]
+    ports: ["26402:26379"]
+    depends_on: [redis1]
+  sentinel3:
+    container_name: sentinel3
+    networks:
+      hagod: {ipv4_address: 172.30.0.53}
+    <<: *redis
+    hostname: sentinel3
+    command: ["sentinel"]
+    volumes: ["./scripts/redis-entrypoint.sh:/entrypoint.sh:ro", "./config/redis:/config:ro", "sentinel3:/data"]
+    ports: ["26403:26379"]
+    depends_on: [redis1]
+
+  # ---------------------------------------------------------------- your workstation
+  # psql, patronictl and redis-cli, preconfigured, in a container that is never killed by a drill.
+  tools:
+    container_name: tools
+    image: hagod-patroni:latest
+    hostname: tools
+    restart: "no"
+    networks:
+      hagod: {ipv4_address: 172.30.0.61}
+    depends_on: [haproxy]
+    environment:
+      PGHOST: haproxy
+      PGPORT: "5000"
+      PGUSER: postgres
+      PGPASSWORD: hagod-super
+      PGDATABASE: bank
+      REDISCLI_AUTH: hagod-redis
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        mkdir -p ~/.config/patroni
+        printf 'scope: hagod\nnamespace: /hagod/\netcd3:\n  hosts: etcd1:2379,etcd2:2379,etcd3:2379\nrestapi:\n  listen: 0.0.0.0:8008\n  connect_address: tools:8008\n' > ~/.config/patroni/patronictl.yaml
+        printf '\\set PROMPT1 '"'"'%%[%%033[1;36m%%]hagod%%[%%033[0m%%] %%/%%R%%# '"'"'\n\\x auto\n\\pset null '"'"'∅'"'"'\n\\timing on\n' > ~/.psqlrc
+        exec sleep infinity
+    volumes: ["backup:/backup", "archive:/archive:ro"]
+
+  # ---------------------------------------------------------------- the probe (profile: probe)
+  writer:
+    container_name: writer
+    profiles: ["probe"]
+    build: images/writer
+    image: hagod-writer:latest
+    restart: "no"
+    networks:
+      hagod: {ipv4_address: 172.30.0.62}
+    depends_on: [haproxy, sentinel1]
+    environment:
+      PG_HOST: haproxy
+      PG_PORT: "5000"
+      PG_PASSWORD: hagod-super
+      REDIS_PASSWORD: hagod-redis
+      INTERVAL: "0.2"
+    volumes: ["writerlog:/data"]
+
+networks:
+  hagod:
+    name: hagod
+    ipam:
+      config: [{subnet: 172.30.0.0/24}]   # fixed addresses: HAProxy and Sentinel must not hold stale IPs after a reconnect
+
+volumes:
+  etcd1: {}
+  etcd2: {}
+  etcd3: {}
+  pg1: {}
+  pg2: {}
+  pg3: {}
+  archive: {}
+  backup: {}
+  redis1: {}
+  redis2: {}
+  redis3: {}
+  sentinel1: {}
+  sentinel2: {}
+  sentinel3: {}
+  writerlog: {}

@@ -1,0 +1,40 @@
+# Optional monitoring: make obs-up   ->  Grafana http://localhost:3300 (admin / admin), Prometheus http://localhost:9191
+services:
+  prometheus:
+    container_name: prometheus
+    image: prom/prometheus:v2.55.1
+    networks: {hagod: {ipv4_address: 172.30.0.70}}
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=6h", "--web.enable-lifecycle"]
+    volumes: ["./obs/prometheus.yml:/etc/prometheus/prometheus.yml:ro", "./obs/alerts.yml:/etc/prometheus/alerts.yml:ro"]
+    ports: ["9191:9090"]   # 9090 is used by other tools on this Mac
+  pg-exporter:
+    container_name: pg-exporter
+    image: prometheuscommunity/postgres-exporter:v0.16.0
+    networks: {hagod: {ipv4_address: 172.30.0.71}}
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:hagod-super@haproxy:5000/postgres?sslmode=disable"
+    command: ["--collector.stat_statements", "--collector.replication_slot", "--collector.stat_bgwriter"]
+  redis-exporter:
+    container_name: redis-exporter
+    image: oliver006/redis_exporter:v1.66.0
+    networks: {hagod: {ipv4_address: 172.30.0.72}}
+    environment: {REDIS_PASSWORD: hagod-redis}
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:11.3.0
+    networks: {hagod: {ipv4_address: 172.30.0.73}}
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/hagod.json
+    volumes:
+      - ./obs/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./obs/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3300:3000"]
+    depends_on: [prometheus]
+
+networks:
+  hagod:
+    external: true
+    name: hagod
